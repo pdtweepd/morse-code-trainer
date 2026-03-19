@@ -1,0 +1,39 @@
+# Ignore Python cache, compiled files, and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+*.log
+
+# Ignore Node.js dependencies
+node_modules/
+
+# Ignore IDE and editor specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Ignore OS specific files
+.DS_Store
+Thumbs.db
+
+# Ignore secrets and sensitive configuration files
+.env
+*.env
+secrets.json
+credentials.json
+config.local.*
+local_settings.py
+
+# Ignore build outputs from dpkg-building script
+# (assuming package_root is where intermediate build files are)
+package_root/
