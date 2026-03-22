@@ -7,7 +7,7 @@ import random
 import subprocess
 import tempfile
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 MORSE_CODE = {
     'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
@@ -199,13 +199,18 @@ def combine_wavs(wav_list, output_filename):
         raise e
 
 def get_lame_path():
+    # Check for system lame first (best for compatibility across architectures)
+    system_lame = "/usr/bin/lame"
+    if os.path.exists(system_lame):
+        return system_lame
+        
+    # Fallback to local node-lame paths
     paths = [
         "/usr/share/morse-converter/node_modules/node-lame/vendor/lame/linux-x64/lame",
         "./node_modules/node-lame/vendor/lame/linux-x64/lame"
     ]
     for p in paths:
-        abs_p = os.path.abspath(p)
-        if os.path.exists(abs_p): return abs_p
+        if os.path.exists(p): return os.path.abspath(p)
     return None
 
 def convert_wav_to_mp3(wav_filename, mp3_filename):

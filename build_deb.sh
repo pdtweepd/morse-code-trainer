@@ -22,7 +22,7 @@ Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: all
-Depends: python3, python3-tk, nodejs, npm, espeak
+Depends: python3, python3-tk, espeak, lame, alsa-utils
 Maintainer: Gemini CLI <gemini-cli@example.com>
 Description: Morse Code to MP3 Converter
  A graphical utility to convert text to Morse code MP3 files 
@@ -44,10 +44,9 @@ EOF
 # 4. Create executable wrapper
 cat << EOF > $PKG_DIR/usr/bin/$APP_NAME
 #!/bin/bash
+# Check for tkinter, though it should be handled by apt dependencies
 if ! python3 -c "import tkinter" &> /dev/null; then
     echo "Error: tkinter (python3-tk) is not installed."
-    echo "Attempting to fix dependencies..."
-    sudo apt-get update && sudo apt-get install -y python3-tk
 fi
 cd /usr/share/$APP_NAME
 python3 morse_gui.py "\$@"
@@ -58,13 +57,7 @@ chmod +x $PKG_DIR/usr/bin/$APP_NAME
 cp morse_logic.py $PKG_DIR/usr/share/$APP_NAME/
 cp morse_gui.py $PKG_DIR/usr/share/$APP_NAME/
 
-# 6. Install node-lame dependency locally in the package
-echo "Installing node-lame dependency inside package..."
-cd $PKG_DIR/usr/share/$APP_NAME
-npm install node-lame --silent
-cd -
-
-# 7. Build the package
+# 6. Build the package
 dpkg-deb --build --root-owner-group $PKG_DIR "${APP_NAME}_${VERSION}_all.deb"
 
 echo "Done! Package created: ${APP_NAME}_${VERSION}_all.deb"

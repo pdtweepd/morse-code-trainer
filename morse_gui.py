@@ -14,6 +14,13 @@ class MorseApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Morse Code Trainer v{morse_logic.VERSION}")
+        
+        # High DPI scaling
+        try:
+            self.root.tk.call('tk', 'scaling', 1.5)
+        except:
+            pass
+            
         self.root.geometry("700x750")
         
         # Variables

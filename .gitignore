@@ -37,3 +37,4 @@ local_settings.py
 # Ignore build outputs from dpkg-building script
 # (assuming package_root is where intermediate build files are)
 package_root/
+GEMINI.md
