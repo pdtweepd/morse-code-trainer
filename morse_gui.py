@@ -9,6 +9,8 @@ except ImportError:
 
 import os
 import time
+import subprocess
+import tempfile
 import morse_logic
 
 class MorseApp:
@@ -38,9 +40,11 @@ class MorseApp:
         self.koch_level = tk.IntVar(value=2)
         self.include_voice = tk.BooleanVar(value=False)
         self.vband_enabled = tk.BooleanVar(value=False)
+        self.qrn_level = tk.DoubleVar(value=0.0)
         
         self.decoder = morse_logic.MorseDecoder(self.char_wpm.get())
         self.user_pulses = [] # [(is_signal, duration, start_time)]
+        self.sidetone_proc = None # For real-time VBand audio feedback
         self.scrolling = False
         self.scroll_offset = 0
         self.pulses = []
@@ -69,11 +73,34 @@ class MorseApp:
             self.decoded_text.insert(tk.END, char)
             self.decoded_text.see(tk.END)
             
-        # Optional: Audible feedback could be added here via a separate process
+        # Real-time Sidetone
+        if not self.sidetone_proc:
+            # Generate a short tone file if it doesn't exist
+            sidetone_file = os.path.join(tempfile.gettempdir(), "sidetone.wav")
+            if not os.path.exists(sidetone_file):
+                morse_logic.generate_morse_wav("E", 1.0, 1.0, 1.0, self.freq.get()) # This creates a temp wav
+                # Actually, let's just use a simple popen call to aplay with a synthesized tone
+                # For simplicity, we'll just trigger aplay on a 1-second sine wave file
+                # But to avoid file I/O lag, we'll just use the logic from play_wav
+                pass
+            
+            try:
+                # Play a continuous tone using aplay and a synthesized pipe (advanced)
+                # For now, let's just use a pre-generated 2-second tone file
+                if not hasattr(self, '_tone_path'):
+                    self._tone_path = morse_logic.generate_morse_wav("T", 2.0, 2.0, 2.0, self.freq.get())
+                self.sidetone_proc = subprocess.Popen(["/usr/bin/aplay", "-q", self._tone_path])
+            except:
+                pass
 
     def on_key_release(self, event):
         if not self.vband_enabled.get(): return
         
+        # Stop sidetone
+        if self.sidetone_proc:
+            self.sidetone_proc.terminate()
+            self.sidetone_proc = None
+
         now = time.time()
         self.decoder.handle_event(False, now)
         
@@ -122,6 +149,14 @@ class MorseApp:
         ttk.Scale(speed_frame, from_=1, to=50, variable=self.eff_wpm, orient=tk.HORIZONTAL).grid(row=1, column=1, sticky=tk.EW, padx=5)
         ttk.Label(speed_frame, textvariable=self.eff_wpm).grid(row=1, column=2)
         
+        # Presets
+        preset_frame = ttk.Frame(speed_frame)
+        preset_frame.grid(row=2, column=0, columnspan=3, pady=(10, 0))
+        ttk.Label(preset_frame, text="Presets:").pack(side=tk.LEFT, padx=5)
+        for wpm in [5, 12, 18, 20, 25]:
+            ttk.Button(preset_frame, text=f"{wpm} WPM", width=8, 
+                       command=lambda w=wpm: [self.char_wpm.set(w), self.eff_wpm.set(w)]).pack(side=tk.LEFT, padx=2)
+        
         speed_frame.columnconfigure(1, weight=1)
         
         # Audio Config
@@ -133,6 +168,12 @@ class MorseApp:
         
         ttk.Checkbutton(audio_frame, text="Include Voice Answer Key", variable=self.include_voice).grid(row=0, column=2, sticky=tk.W, padx=20)
         ttk.Checkbutton(audio_frame, text="Enable VBand Adapter", variable=self.vband_enabled).grid(row=1, column=2, sticky=tk.W, padx=20)
+        
+        ttk.Label(audio_frame, text="QRN (Static) Level:").grid(row=2, column=0, sticky=tk.W)
+        ttk.Scale(audio_frame, from_=0.0, to=0.5, variable=self.qrn_level, orient=tk.HORIZONTAL).grid(row=2, column=1, sticky=tk.EW, padx=5)
+        ttk.Label(audio_frame, textvariable=self.qrn_level).grid(row=2, column=2, sticky=tk.W)
+        
+        audio_frame.columnconfigure(1, weight=1)
         
         # Decoded Input
         decoded_frame = ttk.LabelFrame(main_frame, text="Decoded VBand Input", padding="10")
@@ -287,7 +328,7 @@ class MorseApp:
         text, _ = morse_logic.sanitize_text(text_raw)
         try:
             tu, _, char_g, word_g = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
-            morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get())
+            morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get(), self.qrn_level.get())
             wav_to_play = morse_wav
             if self.include_voice.get():
                 voice_wav = morse_logic.generate_voice_wav(text)
@@ -305,7 +346,7 @@ class MorseApp:
         if ignored and not messagebox.askyesno("Sanitation Warning", f"Skip {len(ignored)} invalid characters?"): return
         try:
             tu, _, char_g, word_g = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
-            morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get())
+            morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get(), self.qrn_level.get())
             final_wav = morse_wav
             if self.include_voice.get():
                 voice_wav = morse_logic.generate_voice_wav(text)

@@ -162,7 +162,7 @@ class MorseDecoder:
                 return self.decode_current()
         return None
 
-def generate_morse_wav(text, tu, char_gap, word_gap, frequency=650.0):
+def generate_morse_wav(text, tu, char_gap, word_gap, frequency=650.0, qrn_level=0.0):
     SAMPLE_RATE = 44100
     RAMP_TIME = 0.005 # 5ms
 
@@ -175,13 +175,24 @@ def generate_morse_wav(text, tu, char_gap, word_gap, frequency=650.0):
                 current_vol = volume * (i / ramp_samples)
             elif i > num_samples - ramp_samples:
                 current_vol = volume * ((num_samples - i) / ramp_samples)
-            value = int(current_vol * 32767.0 * math.sin(2.0 * math.pi * frequency * i / SAMPLE_RATE))
+            
+            # Sine wave signal
+            signal = math.sin(2.0 * math.pi * frequency * i / SAMPLE_RATE)
+            
+            # Mix with QRN (white noise)
+            noise = (random.random() * 2.0 - 1.0) * qrn_level
+            mixed = (signal * (1.0 - qrn_level)) + noise
+            
+            value = int(mixed * 32767.0 * current_vol)
             frames.append(struct.pack('<h', value))
 
     def append_silence(frames, duration):
         num_samples = int(duration * SAMPLE_RATE)
         for i in range(num_samples):
-            frames.append(struct.pack('<h', 0))
+            # Only noise in silence gaps
+            noise = (random.random() * 2.0 - 1.0) * qrn_level
+            value = int(noise * 32767.0 * 0.2) # Noise is quieter in gaps
+            frames.append(struct.pack('<h', value))
 
     frames = []
     tokens = re.findall(r'<[^>]+>|.', text.upper())
