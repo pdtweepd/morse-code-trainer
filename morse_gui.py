@@ -155,42 +155,47 @@ class MorseApp:
         if not self.pulses:
             return
             
-        x = 10 - self.scroll_offset
+        # Playhead position (where the sound "happens")
+        playhead_x = 50
+        x = playhead_x - self.scroll_offset
         y_mid = 25
-        # Scale for visibility: 1 tu = 10 pixels
-        scale = 10
+        scale = 10 # 1 tu = 10 pixels
         
+        # Draw pulses
         for is_signal, duration in self.pulses:
             width = duration * scale
-            if is_signal and x + width > 0:
+            if is_signal and x + width > 0 and x < self.canvas.winfo_width():
                 self.canvas.create_rectangle(x, y_mid-10, x+width, y_mid+10, fill="#00FF00", outline="")
             x += width
+            
+        # Draw Playhead (static red line)
+        self.canvas.create_line(playhead_x, 0, playhead_x, 50, fill="red", width=2)
 
     def start_scroll(self):
         self.scrolling = True
-        self.scroll_offset = -self.canvas.winfo_width() # Start from right side
+        self.scroll_offset = 0 # Start exactly at the first pulse
         self.animate_scroll()
 
     def animate_scroll(self):
         if not self.scrolling:
             return
             
-        # Speed: depends on WPM. 1 TU per some ms.
         tu, _, _, _ = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
-        # We want to move 'scale' pixels every 'tu' seconds
-        # To make it smooth, let's move 2 pixels every (tu * 2 / scale) * 1000 ms
-        self.scroll_offset += 2
+        
+        # Move 1 pixel at a time for maximum smoothness
+        self.scroll_offset += 1
         self.draw_waterfall()
         
-        # Check if we've scrolled past all pulses
-        total_width = sum(d for _, d in self.pulses) * 10 + self.canvas.winfo_width()
-        if self.scroll_offset > total_width:
+        # Calculate total width to know when to stop
+        total_width = sum(d for _, d in self.pulses) * 10
+        if self.scroll_offset > total_width + 50:
             self.scrolling = False
             self.scroll_offset = 0
             self.draw_waterfall()
         else:
-            ms = int((tu * 2 / 10) * 1000)
-            self.root.after(max(10, ms), self.animate_scroll)
+            # Time to move 1 pixel = (tu / scale)
+            ms = int((tu / 10) * 1000)
+            self.root.after(max(5, ms), self.animate_scroll)
 
     def generate_random(self):
         text = morse_logic.generate_random_text(self.random_count.get(), self.random_mode.get(), self.koch_level.get())
