@@ -7,7 +7,7 @@ import random
 import subprocess
 import tempfile
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 MORSE_CODE = {
     'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',

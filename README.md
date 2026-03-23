@@ -15,7 +15,7 @@ A Python utility that converts text input into Morse code audio files in MP3 for
 To install the program and all its dependencies automatically, run:
 
 ```bash
-sudo apt install ./morse-converter_1.0.3_all.deb
+sudo apt install ./morse-converter_1.0.4_all.deb
 ```
 
 *Note: Using `apt` instead of `dpkg` ensures that system dependencies like `python3-tk` and `espeak` are installed automatically.*

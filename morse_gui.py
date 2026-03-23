@@ -27,7 +27,11 @@ class MorseApp:
         self.char_wpm = tk.IntVar(value=12)
         self.eff_wpm = tk.IntVar(value=5)
         self.freq = tk.DoubleVar(value=650)
-        self.output_file = tk.StringVar(value="morse.mp3")
+        
+        # Default to home directory
+        home_dir = os.path.expanduser("~")
+        self.output_file = tk.StringVar(value=os.path.join(home_dir, "morse_practice.mp3"))
+        
         self.random_count = tk.IntVar(value=10)
         self.random_mode = tk.StringVar(value="mixed")
         self.koch_level = tk.IntVar(value=2)
@@ -117,6 +121,24 @@ class MorseApp:
         self.status = ttk.Label(main_frame, text="Ready", foreground="blue")
         self.status.pack(pady=5)
 
+    def sanitize_for_filename(self, text):
+        # Take first 20 chars, replace non-alphanumeric with underscore
+        snippet = text[:20].strip()
+        sanitized = "".join(c if c.isalnum() else "_" for c in snippet)
+        return sanitized if sanitized else "practice"
+
+    def update_default_filename(self):
+        # Only update if the user hasn't manually browsed for a file in a different directory
+        current_path = self.output_file.get()
+        home_dir = os.path.expanduser("~")
+        
+        # If the path is in the home directory, we allow auto-updating the filename
+        if os.path.dirname(current_path) == home_dir:
+            text = self.text_input.get(1.0, tk.END).strip()
+            if text:
+                name = self.sanitize_for_filename(text)
+                self.output_file.set(os.path.join(home_dir, f"morse_{name}.mp3"))
+
     def update_visual(self, event=None):
         text = self.text_input.get(1.0, tk.END).strip()
         visual = morse_logic.get_visual_morse(text)
@@ -124,12 +146,14 @@ class MorseApp:
         self.visual_feed.delete(1.0, tk.END)
         self.visual_feed.insert(tk.END, visual)
         self.visual_feed.config(state=tk.DISABLED)
+        self.update_default_filename()
 
     def generate_random(self):
         text = morse_logic.generate_random_text(self.random_count.get(), self.random_mode.get(), self.koch_level.get())
         self.text_input.delete(1.0, tk.END)
         self.text_input.insert(tk.END, text)
         self.update_visual()
+        self.update_default_filename()
         self.status.config(text=f"Generated {self.random_count.get()} random groups.", foreground="green")
 
     def browse_file(self):
