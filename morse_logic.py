@@ -76,29 +76,31 @@ def get_visual_morse(text):
     return "".join(visual)
 
 def get_morse_pulses(text, tu, ts, char_gap, word_gap):
-    # Returns a list of (is_signal, duration_units)
-    # 1 tu = base unit
+    # Returns a list of (is_signal, duration_units, label)
     text, _ = sanitize_text(text)
     pulses = []
     tokens = re.findall(r'<[^>]+>|.', text)
     for i, token in enumerate(tokens):
         if token == ' ':
-            pulses.append((False, word_gap / tu))
+            pulses.append((False, word_gap / tu, None))
         else:
             code = MORSE_CODE.get(token, "")
             for j, sym in enumerate(code):
+                # Label only the first pulse of the character
+                label = token if j == 0 else None
+                
                 if sym == '.':
-                    pulses.append((True, 1))
+                    pulses.append((True, 1, label))
                 elif sym == '-':
-                    pulses.append((True, 3))
+                    pulses.append((True, 3, label))
                 
                 # Intra-character gap
                 if j < len(code) - 1:
-                    pulses.append((False, 1))
+                    pulses.append((False, 1, None))
             
             # Inter-character gap
             if i < len(tokens) - 1 and tokens[i+1] != ' ':
-                pulses.append((False, char_gap / tu))
+                pulses.append((False, char_gap / tu, None))
     return pulses
 
 def generate_random_text(count=10, mode="mixed", koch_level=2):

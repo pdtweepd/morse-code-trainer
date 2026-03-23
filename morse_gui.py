@@ -158,14 +158,21 @@ class MorseApp:
         # Playhead position (where the sound "happens")
         playhead_x = 50
         x = playhead_x - self.scroll_offset
-        y_mid = 25
+        y_mid = 30
         scale = 10 # 1 tu = 10 pixels
         
-        # Draw pulses
-        for is_signal, duration in self.pulses:
+        # Draw pulses and character labels
+        for is_signal, duration, label in self.pulses:
             width = duration * scale
-            if is_signal and x + width > 0 and x < self.canvas.winfo_width():
-                self.canvas.create_rectangle(x, y_mid-10, x+width, y_mid+10, fill="#00FF00", outline="")
+            if x + width > 0 and x < self.canvas.winfo_width():
+                if is_signal:
+                    self.canvas.create_rectangle(x, y_mid-5, x+width, y_mid+10, fill="#00FF00", outline="")
+                
+                # Draw the label if this pulse marks the start of a character
+                if label:
+                    # Filter out prosigns tags like <BT> for display, or show them simply
+                    display_label = label.strip('<>') if label.startswith('<') else label
+                    self.canvas.create_text(x, y_mid-15, text=display_label, fill="white", font=("Arial", 9, "bold"), anchor="sw")
             x += width
             
         # Draw Playhead (static red line)
