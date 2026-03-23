@@ -22,7 +22,7 @@ class MorseApp:
         except:
             pass
             
-        self.root.geometry("750x850") # Slightly larger to fit new controls
+        self.root.geometry("750x850")
         
         # Variables
         self.char_wpm = tk.IntVar(value=12)
@@ -41,6 +41,9 @@ class MorseApp:
         
         self.decoder = morse_logic.MorseDecoder(self.char_wpm.get())
         self.user_pulses = [] # [(is_signal, duration, start_time)]
+        self.scrolling = False
+        self.scroll_offset = 0
+        self.pulses = []
         
         self.create_widgets()
         self.bind_keys()
@@ -57,13 +60,16 @@ class MorseApp:
         if self.decoder.is_down: return # Prevent auto-repeat
         
         now = time.time()
+        # Visual pulse
+        self.user_pulses.append([True, 0, now])
+        
+        # Decoder logic
         char = self.decoder.handle_event(True, now)
         if char:
             self.decoded_text.insert(tk.END, char)
             self.decoded_text.see(tk.END)
-        
-        # Add a placeholder for the pulse we're currently drawing
-        self.user_pulses.append([True, 0, now])
+            
+        # Optional: Audible feedback could be added here via a separate process
 
     def on_key_release(self, event):
         if not self.vband_enabled.get(): return
@@ -71,10 +77,10 @@ class MorseApp:
         now = time.time()
         self.decoder.handle_event(False, now)
         
-        # Finalize the last user pulse
+        # Finalize visual pulse
         if self.user_pulses and self.user_pulses[-1][0]:
             self.user_pulses[-1][1] = now - self.user_pulses[-1][2]
-            # Add a gap placeholder
+            # Add gap
             self.user_pulses.append([False, 0, now])
 
     def check_decoder_timeout(self):
@@ -86,16 +92,15 @@ class MorseApp:
                 self.decoded_text.insert(tk.END, char)
                 self.decoded_text.see(tk.END)
             
-            # Update current user gap or pulse duration for live waterfall
+            # Update current live pulse/gap
             if self.user_pulses:
                 self.user_pulses[-1][1] = now - self.user_pulses[-1][2]
-                # Cleanup old user pulses that scrolled off screen (limit to 100)
                 if len(self.user_pulses) > 100:
                     self.user_pulses = self.user_pulses[-50:]
             
             self.draw_waterfall()
             
-        self.root.after(50, self.check_decoder_timeout)
+        self.root.after(30, self.check_decoder_timeout)
 
     def create_widgets(self):
         style = ttk.Style()
@@ -120,14 +125,14 @@ class MorseApp:
         speed_frame.columnconfigure(1, weight=1)
         
         # Audio Config
-        audio_frame = ttk.LabelFrame(main_frame, text="Audio & Trainer Config", padding="10")
+        audio_frame = ttk.LabelFrame(main_frame, text="Audio & VBand Config", padding="10")
         audio_frame.pack(fill=tk.X, pady=5)
         
         ttk.Label(audio_frame, text="Frequency (Hz):").grid(row=0, column=0, sticky=tk.W)
         ttk.Entry(audio_frame, textvariable=self.freq, width=10).grid(row=0, column=1, sticky=tk.W, padx=5)
         
-        ttk.Checkbutton(audio_frame, text="Include Voice Answer Key (requires espeak)", variable=self.include_voice).grid(row=0, column=2, sticky=tk.W, padx=20)
-        ttk.Checkbutton(audio_frame, text="Enable VBand Adapter Input", variable=self.vband_enabled).grid(row=1, column=2, sticky=tk.W, padx=20)
+        ttk.Checkbutton(audio_frame, text="Include Voice Answer Key", variable=self.include_voice).grid(row=0, column=2, sticky=tk.W, padx=20)
+        ttk.Checkbutton(audio_frame, text="Enable VBand Adapter", variable=self.vband_enabled).grid(row=1, column=2, sticky=tk.W, padx=20)
         
         # Decoded Input
         decoded_frame = ttk.LabelFrame(main_frame, text="Decoded VBand Input", padding="10")
@@ -154,21 +159,16 @@ class MorseApp:
         self.mode_menu = ttk.OptionMenu(rand_frame, self.random_mode, "mixed", "letters", "numbers", "punctuation", "koch", "mixed")
         self.mode_menu.pack(side=tk.LEFT, padx=5)
         
-        self.koch_label = ttk.Label(rand_frame, text="Koch Lvl:")
-        self.koch_label.pack(side=tk.LEFT, padx=(10, 0))
-        self.koch_spin = ttk.Spinbox(rand_frame, from_=2, to=40, textvariable=self.koch_level, width=3)
-        self.koch_spin.pack(side=tk.LEFT, padx=5)
+        ttk.Label(rand_frame, text="Koch Lvl:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Spinbox(rand_frame, from_=2, to=40, textvariable=self.koch_level, width=3).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(rand_frame, text="Generate Practice", command=self.generate_random).pack(side=tk.LEFT, padx=5)
         
         # Visual Morse Display
-        vis_frame = ttk.LabelFrame(main_frame, text="Waterfall Display (Scrolling Morse)", padding="10")
+        vis_frame = ttk.LabelFrame(main_frame, text="Waterfall Display", padding="10")
         vis_frame.pack(fill=tk.X, pady=5)
         self.canvas = tk.Canvas(vis_frame, height=50, bg="black", highlightthickness=0)
         self.canvas.pack(fill=tk.X)
-        self.pulses = []
-        self.scroll_offset = 0
-        self.scrolling = False
         
         # Output File
         out_frame = ttk.Frame(main_frame)
@@ -191,17 +191,13 @@ class MorseApp:
         self.status.pack(pady=5)
 
     def sanitize_for_filename(self, text):
-        # Take first 20 chars, replace non-alphanumeric with underscore
         snippet = text[:20].strip()
         sanitized = "".join(c if c.isalnum() else "_" for c in snippet)
         return sanitized if sanitized else "practice"
 
     def update_default_filename(self):
-        # Only update if the user hasn't manually browsed for a file in a different directory
         current_path = self.output_file.get()
         home_dir = os.path.expanduser("~")
-        
-        # If the path is in the home directory, we allow auto-updating the filename
         if os.path.dirname(current_path) == home_dir:
             text = self.text_input.get(1.0, tk.END).strip()
             if text:
@@ -218,14 +214,12 @@ class MorseApp:
 
     def draw_waterfall(self):
         self.canvas.delete("all")
-        
-        # Playhead position
         playhead_x = 50
         y_mid = 25
-        scale = 10 # 1 tu = 10 pixels (tu depends on WPM)
+        scale = 10 
         tu, _, _, _ = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
 
-        # 1. Draw Generated Pulses (Green)
+        # 1. Generated Pulses
         if self.pulses:
             x = playhead_x - self.scroll_offset
             for is_signal, duration, label in self.pulses:
@@ -238,49 +232,35 @@ class MorseApp:
                         self.canvas.create_text(x, y_mid-22, text=display_label, fill="white", font=("Arial", 8, "bold"), anchor="sw")
                 x += width
 
-        # 2. Draw User Pulses (Orange) - only if VBand enabled
+        # 2. User Pulses
         if self.vband_enabled.get() and self.user_pulses:
-            # The last pulse in user_pulses is the one currently being keyed
             now = time.time()
-            # Calculate x based on time difference from playhead
             for is_signal, duration, start_time in reversed(self.user_pulses):
-                # How many TUs ago did this start?
-                # We place 'now' at the playhead
                 units_ago = (now - start_time) / tu
                 x_start = playhead_x - (units_ago * scale)
                 width = (duration / tu) * scale
-                
-                if x_start + width < 0: break # Too far left
-                
+                if x_start + width < 0: break
                 if is_signal:
                     self.canvas.create_rectangle(x_start, y_mid+2, x_start+width, y_mid+12, fill="#FFA500", outline="")
             
-        # 3. Draw Playhead (static red line)
         self.canvas.create_line(playhead_x, 0, playhead_x, 50, fill="red", width=2)
 
     def start_scroll(self):
         self.scrolling = True
-        self.scroll_offset = 0 # Start exactly at the first pulse
+        self.scroll_offset = 0
         self.animate_scroll()
 
     def animate_scroll(self):
-        if not self.scrolling:
-            return
-            
+        if not self.scrolling: return
         tu, _, _, _ = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
-        
-        # Move 1 pixel at a time for maximum smoothness
         self.scroll_offset += 1
         self.draw_waterfall()
-        
-        # Calculate total width to know when to stop
-        total_width = sum(d for _, d in self.pulses) * 10
+        total_width = sum(d for _, d, _ in self.pulses) * 10
         if self.scroll_offset > total_width + 50:
             self.scrolling = False
             self.scroll_offset = 0
             self.draw_waterfall()
         else:
-            # Time to move 1 pixel = (tu / scale)
             ms = int((tu / 10) * 1000)
             self.root.after(max(5, ms), self.animate_scroll)
 
@@ -289,12 +269,10 @@ class MorseApp:
         self.text_input.delete(1.0, tk.END)
         self.text_input.insert(tk.END, text)
         self.update_visual()
-        self.status.config(text=f"Generated {self.random_count.get()} random groups.", foreground="green")
 
     def browse_file(self):
         filename = filedialog.asksaveasfilename(defaultextension=".mp3", filetypes=[("MP3 files", "*.mp3")])
-        if filename:
-            self.output_file.set(filename)
+        if filename: self.output_file.set(filename)
 
     def check_deps(self):
         lame = morse_logic.get_lame_path()
@@ -305,81 +283,37 @@ class MorseApp:
 
     def play_preview(self):
         text_raw = self.text_input.get(1.0, tk.END).strip()
-        if not text_raw:
-            messagebox.showwarning("Warning", "Please enter some text.")
-            return
-            
-        text, ignored = morse_logic.sanitize_text(text_raw)
-        if ignored:
-            self.status.config(text=f"Sanitized: removed {len(ignored)} invalid chars", foreground="orange")
-            
-        self.status.config(text="Generating preview...", foreground="blue")
-        self.root.update_idletasks()
-        
+        if not text_raw: return
+        text, _ = morse_logic.sanitize_text(text_raw)
         try:
             tu, _, char_g, word_g = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
             morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get())
-            
             wav_to_play = morse_wav
-            voice_wav = None
-            
             if self.include_voice.get():
                 voice_wav = morse_logic.generate_voice_wav(text)
                 if voice_wav:
-                    combined = morse_logic.combine_wavs([morse_wav, voice_wav], "combined.wav")
-                    wav_to_play = combined
-            
+                    wav_to_play = morse_logic.combine_wavs([morse_wav, voice_wav], "combined.wav")
             self.start_scroll()
-            success, msg = morse_logic.play_wav(wav_to_play)
-            if success:
-                self.status.config(text="Playing Morse...", foreground="green")
-            else:
-                messagebox.showerror("Error", msg)
-                
+            morse_logic.play_wav(wav_to_play)
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
     def execute(self):
         text_raw = self.text_input.get(1.0, tk.END).strip()
-        if not text_raw:
-            messagebox.showwarning("Warning", "Please enter some text.")
-            return
-            
+        if not text_raw: return
         text, ignored = morse_logic.sanitize_text(text_raw)
-        if ignored:
-            message = f"Warning: These characters are not supported and will be skipped:\n{', '.join(sorted(ignored))}\n\nContinue?"
-            if not messagebox.askyesno("Sanitation Warning", message):
-                return
-            
-        self.status.config(text="Processing...", foreground="blue")
-        self.root.update_idletasks()
-        
+        if ignored and not messagebox.askyesno("Sanitation Warning", f"Skip {len(ignored)} invalid characters?"): return
         try:
             tu, _, char_g, word_g = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
             morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get())
-            
             final_wav = morse_wav
             if self.include_voice.get():
                 voice_wav = morse_logic.generate_voice_wav(text)
-                if voice_wav:
-                    final_wav = morse_logic.combine_wavs([morse_wav, voice_wav], "final.wav")
-            
+                if voice_wav: final_wav = morse_logic.combine_wavs([morse_wav, voice_wav], "final.wav")
             success, msg = morse_logic.convert_wav_to_mp3(final_wav, self.output_file.get())
-            
-            # Cleanup temp wavs
-            if os.path.exists(morse_wav): os.remove(morse_wav)
-            if self.include_voice.get() and voice_wav and os.path.exists(voice_wav): os.remove(voice_wav)
-            if final_wav != morse_wav and os.path.exists(final_wav): os.remove(final_wav)
-                
-            if success:
-                self.status.config(text=f"Successfully saved to {os.path.basename(self.output_file.get())}", foreground="green")
-                messagebox.showinfo("Success", f"MP3 generated successfully:\n{self.output_file.get()}")
-            else:
-                self.status.config(text="Conversion failed!", foreground="red")
-                messagebox.showerror("Error", msg)
-                
+            if success: messagebox.showinfo("Success", f"Saved to {self.output_file.get()}")
+            else: messagebox.showerror("Error", msg)
         except Exception as e:
-            self.status.config(text="Error occurred!", foreground="red")
             messagebox.showerror("Error", str(e))
 
 if __name__ == "__main__":
