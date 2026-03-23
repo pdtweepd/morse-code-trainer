@@ -7,7 +7,7 @@ import os
 import re
 import random
 
-VERSION = "1.0.4"
+VERSION = "1.1.0"
 
 def check_dependencies():
     missing = []
