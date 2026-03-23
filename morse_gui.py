@@ -96,10 +96,13 @@ class MorseApp:
         ttk.Button(rand_frame, text="Generate Practice", command=self.generate_random).pack(side=tk.LEFT, padx=5)
         
         # Visual Morse Display
-        vis_frame = ttk.LabelFrame(main_frame, text="Visual Morse Feed", padding="10")
+        vis_frame = ttk.LabelFrame(main_frame, text="Waterfall Display (Scrolling Morse)", padding="10")
         vis_frame.pack(fill=tk.X, pady=5)
-        self.visual_feed = tk.Text(vis_frame, height=3, font=('Courier New', 12), state=tk.DISABLED, bg="#f0f0f0")
-        self.visual_feed.pack(fill=tk.X)
+        self.canvas = tk.Canvas(vis_frame, height=50, bg="black", highlightthickness=0)
+        self.canvas.pack(fill=tk.X)
+        self.pulses = []
+        self.scroll_offset = 0
+        self.scrolling = False
         
         # Output File
         out_frame = ttk.Frame(main_frame)
@@ -141,19 +144,59 @@ class MorseApp:
 
     def update_visual(self, event=None):
         text = self.text_input.get(1.0, tk.END).strip()
-        visual = morse_logic.get_visual_morse(text)
-        self.visual_feed.config(state=tk.NORMAL)
-        self.visual_feed.delete(1.0, tk.END)
-        self.visual_feed.insert(tk.END, visual)
-        self.visual_feed.config(state=tk.DISABLED)
+        tu, ts, char_gap, word_gap = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
+        self.pulses = morse_logic.get_morse_pulses(text, tu, ts, char_gap, word_gap)
+        self.scroll_offset = 0
+        self.draw_waterfall()
         self.update_default_filename()
+
+    def draw_waterfall(self):
+        self.canvas.delete("all")
+        if not self.pulses:
+            return
+            
+        x = 10 - self.scroll_offset
+        y_mid = 25
+        # Scale for visibility: 1 tu = 10 pixels
+        scale = 10
+        
+        for is_signal, duration in self.pulses:
+            width = duration * scale
+            if is_signal and x + width > 0:
+                self.canvas.create_rectangle(x, y_mid-10, x+width, y_mid+10, fill="#00FF00", outline="")
+            x += width
+
+    def start_scroll(self):
+        self.scrolling = True
+        self.scroll_offset = -self.canvas.winfo_width() # Start from right side
+        self.animate_scroll()
+
+    def animate_scroll(self):
+        if not self.scrolling:
+            return
+            
+        # Speed: depends on WPM. 1 TU per some ms.
+        tu, _, _, _ = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
+        # We want to move 'scale' pixels every 'tu' seconds
+        # To make it smooth, let's move 2 pixels every (tu * 2 / scale) * 1000 ms
+        self.scroll_offset += 2
+        self.draw_waterfall()
+        
+        # Check if we've scrolled past all pulses
+        total_width = sum(d for _, d in self.pulses) * 10 + self.canvas.winfo_width()
+        if self.scroll_offset > total_width:
+            self.scrolling = False
+            self.scroll_offset = 0
+            self.draw_waterfall()
+        else:
+            ms = int((tu * 2 / 10) * 1000)
+            self.root.after(max(10, ms), self.animate_scroll)
 
     def generate_random(self):
         text = morse_logic.generate_random_text(self.random_count.get(), self.random_mode.get(), self.koch_level.get())
         self.text_input.delete(1.0, tk.END)
         self.text_input.insert(tk.END, text)
         self.update_visual()
-        self.update_default_filename()
         self.status.config(text=f"Generated {self.random_count.get()} random groups.", foreground="green")
 
     def browse_file(self):
@@ -194,6 +237,7 @@ class MorseApp:
                     combined = morse_logic.combine_wavs([morse_wav, voice_wav], "combined.wav")
                     wav_to_play = combined
             
+            self.start_scroll()
             success, msg = morse_logic.play_wav(wav_to_play)
             if success:
                 self.status.config(text="Playing Morse...", foreground="green")
