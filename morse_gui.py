@@ -8,6 +8,7 @@ except ImportError:
     sys.exit(1)
 
 import os
+import time
 import morse_logic
 
 class MorseApp:
@@ -21,7 +22,7 @@ class MorseApp:
         except:
             pass
             
-        self.root.geometry("700x750")
+        self.root.geometry("750x850") # Slightly larger to fit new controls
         
         # Variables
         self.char_wpm = tk.IntVar(value=12)
@@ -36,9 +37,66 @@ class MorseApp:
         self.random_mode = tk.StringVar(value="mixed")
         self.koch_level = tk.IntVar(value=2)
         self.include_voice = tk.BooleanVar(value=False)
+        self.vband_enabled = tk.BooleanVar(value=False)
+        
+        self.decoder = morse_logic.MorseDecoder(self.char_wpm.get())
+        self.user_pulses = [] # [(is_signal, duration, start_time)]
         
         self.create_widgets()
+        self.bind_keys()
+        self.check_decoder_timeout()
+
+    def bind_keys(self):
+        # VBand common keys
+        for key in ['bracketleft', 'bracketright', 'period', 'comma', 'slash', 'space']:
+            self.root.bind(f'<KeyPress-{key}>', self.on_key_press)
+            self.root.bind(f'<KeyRelease-{key}>', self.on_key_release)
+
+    def on_key_press(self, event):
+        if not self.vband_enabled.get(): return
+        if self.decoder.is_down: return # Prevent auto-repeat
         
+        now = time.time()
+        char = self.decoder.handle_event(True, now)
+        if char:
+            self.decoded_text.insert(tk.END, char)
+            self.decoded_text.see(tk.END)
+        
+        # Add a placeholder for the pulse we're currently drawing
+        self.user_pulses.append([True, 0, now])
+
+    def on_key_release(self, event):
+        if not self.vband_enabled.get(): return
+        
+        now = time.time()
+        self.decoder.handle_event(False, now)
+        
+        # Finalize the last user pulse
+        if self.user_pulses and self.user_pulses[-1][0]:
+            self.user_pulses[-1][1] = now - self.user_pulses[-1][2]
+            # Add a gap placeholder
+            self.user_pulses.append([False, 0, now])
+
+    def check_decoder_timeout(self):
+        if self.vband_enabled.get():
+            now = time.time()
+            self.decoder.set_wpm(self.char_wpm.get())
+            char = self.decoder.check_timeout(now)
+            if char:
+                self.decoded_text.insert(tk.END, char)
+                self.decoded_text.see(tk.END)
+            
+            # Update current user gap or pulse duration for live waterfall
+            if self.user_pulses:
+                self.user_pulses[-1][1] = now - self.user_pulses[-1][2]
+                # Cleanup old user pulses that scrolled off screen (limit to 100)
+                if len(self.user_pulses) > 100:
+                    self.user_pulses = self.user_pulses[-50:]
+            
+            self.draw_waterfall()
+            
+        self.root.after(50, self.check_decoder_timeout)
+
     def create_widgets(self):
         style = ttk.Style()
         style.configure('TLabel', font=('Arial', 10))
@@ -69,9 +127,17 @@ class MorseApp:
         ttk.Entry(audio_frame, textvariable=self.freq, width=10).grid(row=0, column=1, sticky=tk.W, padx=5)
         
         ttk.Checkbutton(audio_frame, text="Include Voice Answer Key (requires espeak)", variable=self.include_voice).grid(row=0, column=2, sticky=tk.W, padx=20)
+        ttk.Checkbutton(audio_frame, text="Enable VBand Adapter Input", variable=self.vband_enabled).grid(row=1, column=2, sticky=tk.W, padx=20)
+        
+        # Decoded Input
+        decoded_frame = ttk.LabelFrame(main_frame, text="Decoded VBand Input", padding="10")
+        decoded_frame.pack(fill=tk.X, pady=5)
+        self.decoded_text = tk.Text(decoded_frame, height=2, font=('Arial', 12), bg="#e8f4f8")
+        self.decoded_text.pack(fill=tk.X)
+        ttk.Button(decoded_frame, text="Clear", command=lambda: self.decoded_text.delete(1.0, tk.END)).pack(side=tk.RIGHT)
         
         # Text Input
-        text_frame = ttk.LabelFrame(main_frame, text="Input Text", padding="10")
+        text_frame = ttk.LabelFrame(main_frame, text="Input Text (to Generate)", padding="10")
         text_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
         self.text_input = scrolledtext.ScrolledText(text_frame, height=6, font=('Courier New', 11))
@@ -152,30 +218,44 @@ class MorseApp:
 
     def draw_waterfall(self):
         self.canvas.delete("all")
-        if not self.pulses:
-            return
-            
-        # Playhead position (where the sound "happens")
-        playhead_x = 50
-        x = playhead_x - self.scroll_offset
-        y_mid = 30
-        scale = 10 # 1 tu = 10 pixels
         
-        # Draw pulses and character labels
-        for is_signal, duration, label in self.pulses:
-            width = duration * scale
-            if x + width > 0 and x < self.canvas.winfo_width():
-                if is_signal:
-                    self.canvas.create_rectangle(x, y_mid-5, x+width, y_mid+10, fill="#00FF00", outline="")
+        # Playhead position
+        playhead_x = 50
+        y_mid = 25
+        scale = 10 # 1 tu = 10 pixels (tu depends on WPM)
+        tu, _, _, _ = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
+
+        # 1. Draw Generated Pulses (Green)
+        if self.pulses:
+            x = playhead_x - self.scroll_offset
+            for is_signal, duration, label in self.pulses:
+                width = duration * scale
+                if x + width > 0 and x < self.canvas.winfo_width():
+                    if is_signal:
+                        self.canvas.create_rectangle(x, y_mid-12, x+width, y_mid-2, fill="#00FF00", outline="")
+                    if label:
+                        display_label = label.strip('<>') if label.startswith('<') else label
+                        self.canvas.create_text(x, y_mid-22, text=display_label, fill="white", font=("Arial", 8, "bold"), anchor="sw")
+                x += width
+
+        # 2. Draw User Pulses (Orange) - only if VBand enabled
+        if self.vband_enabled.get() and self.user_pulses:
+            # The last pulse in user_pulses is the one currently being keyed
+            now = time.time()
+            # Calculate x based on time difference from playhead
+            for is_signal, duration, start_time in reversed(self.user_pulses):
+                # How many TUs ago did this start?
+                # We place 'now' at the playhead
+                units_ago = (now - start_time) / tu
+                x_start = playhead_x - (units_ago * scale)
+                width = (duration / tu) * scale
                 
-                # Draw the label if this pulse marks the start of a character
-                if label:
-                    # Filter out prosigns tags like <BT> for display, or show them simply
-                    display_label = label.strip('<>') if label.startswith('<') else label
-                    self.canvas.create_text(x, y_mid-15, text=display_label, fill="white", font=("Arial", 9, "bold"), anchor="sw")
-            x += width
+                if x_start + width < 0: break # Too far left
+                
+                if is_signal:
+                    self.canvas.create_rectangle(x_start, y_mid+2, x_start+width, y_mid+12, fill="#FFA500", outline="")
             
-        # Draw Playhead (static red line)
+        # 3. Draw Playhead (static red line)
         self.canvas.create_line(playhead_x, 0, playhead_x, 50, fill="red", width=2)
 
     def start_scroll(self):

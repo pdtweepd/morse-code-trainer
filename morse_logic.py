@@ -103,27 +103,64 @@ def get_morse_pulses(text, tu, ts, char_gap, word_gap):
                 pulses.append((False, char_gap / tu, None))
     return pulses
 
-def generate_random_text(count=10, mode="mixed", koch_level=2):
-    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    numbers = "0123456789"
-    punctuation = ".,?!/()&:;=+-_\"$@"
-    
-    if mode == "letters":
-        pool = letters
-    elif mode == "numbers":
-        pool = numbers
-    elif mode == "punctuation":
-        pool = punctuation
-    elif mode == "koch":
-        pool = KOCH_SEQUENCE[:max(2, min(koch_level, len(KOCH_SEQUENCE)))]
-    else: # mixed
-        pool = letters + numbers + punctuation
-    
-    groups = []
-    for _ in range(count):
-        group = "".join(random.choice(pool) for _ in range(5))
-        groups.append(group)
-    return " ".join(groups)
+class MorseDecoder:
+    def __init__(self, wpm):
+        self.wpm = wpm
+        self.tu = 1.2 / wpm
+        self.current_code = ""
+        self.last_event_time = 0
+        self.is_down = False
+        
+    def set_wpm(self, wpm):
+        self.wpm = wpm
+        self.tu = 1.2 / wpm
+
+    def handle_event(self, is_down, timestamp):
+        # timestamp is in seconds
+        if self.last_event_time == 0:
+            self.last_event_time = timestamp
+            self.is_down = is_down
+            return None
+
+        duration = timestamp - self.last_event_time
+        self.last_event_time = timestamp
+        
+        result = None
+        
+        if not is_down: # Key released (was down for 'duration')
+            # Determine if it was a dit or dash
+            if duration < self.tu * 2:
+                self.current_code += "."
+            else:
+                self.current_code += "-"
+        else: # Key pressed (was up for 'duration')
+            # If gap > 3 units, it's the end of a character
+            if duration > self.tu * 2.5:
+                result = self.decode_current()
+                
+        self.is_down = is_down
+        return result
+
+    def decode_current(self):
+        if not self.current_code:
+            return None
+            
+        char = None
+        # Reverse lookup MORSE_CODE
+        for c, code in MORSE_CODE.items():
+            if code == self.current_code:
+                char = c
+                break
+        
+        self.current_code = ""
+        return char
+
+    def check_timeout(self, timestamp):
+        # Call this periodically to see if a character should be finalized
+        if not self.is_down and self.current_code:
+            if timestamp - self.last_event_time > self.tu * 3:
+                return self.decode_current()
+        return None
 
 def generate_morse_wav(text, tu, char_gap, word_gap, frequency=650.0):
     SAMPLE_RATE = 44100
