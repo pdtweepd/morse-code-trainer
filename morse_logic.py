@@ -7,16 +7,16 @@ import random
 import subprocess
 import tempfile
 
-VERSION = "1.1.0"
+VERSION = "1.2.1"
 
 MORSE_CODE = {
     'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
     'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
     'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
     'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-    'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.---', '2': '..---',
+    'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
     '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
-    '8': '---..', '9': '----.', ' ': '/',
+    '8': '---..', '9': '----.',
     '.': '.-.-.-', ',': '--..--', '?': '..--..', "'": '.----.', '!': '-.-.--',
     '/': '-..-.', '(': '-.--.', ')': '-.--.-', '&': '.-...', ':': '---...',
     ';': '-.-.-.', '=': '-...-', '+': '.-.-.', '-': '-....-', '_': '..--.-',
@@ -28,6 +28,25 @@ MORSE_CODE = {
 
 # Standard Koch character order
 KOCH_SEQUENCE = "KMRSUAPTLOWI.NJEF0Y,VG5/Q9ZH38B?427C16"
+
+def generate_random_text(count=10, mode="mixed", koch_level=2):
+    if mode == "koch":
+        level = max(2, min(koch_level, len(KOCH_SEQUENCE)))
+        pool = KOCH_SEQUENCE[:level]
+    else:
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        numbers = "0123456789"
+        if mode == "letters":
+            pool = letters
+        elif mode == "numbers":
+            pool = numbers
+        else:
+            pool = letters + numbers
+    groups = []
+    for _ in range(count):
+        group = "".join(random.choice(pool) for _ in range(5))
+        groups.append(group)
+    return " ".join(groups)
 
 def calculate_timings(wpm_char, wpm_eff):
     tu = 1.2 / wpm_char
@@ -104,13 +123,22 @@ def get_morse_pulses(text, tu, ts, char_gap, word_gap):
     return pulses
 
 class MorseDecoder:
+    _REVERSE_MORSE = {code: char for char, code in MORSE_CODE.items() if not char.startswith('<')}
+
     def __init__(self, wpm):
         self.wpm = wpm
         self.tu = 1.2 / wpm
         self.current_code = ""
         self.last_event_time = 0
         self.is_down = False
-        
+        self._space_emitted = False
+
+    def reset(self):
+        self.current_code = ""
+        self.last_event_time = 0
+        self.is_down = False
+        self._space_emitted = False
+
     def set_wpm(self, wpm):
         self.wpm = wpm
         self.tu = 1.2 / wpm
@@ -133,10 +161,12 @@ class MorseDecoder:
                 self.current_code += "."
             else:
                 self.current_code += "-"
+            self._space_emitted = False
         else: # Key pressed (was up for 'duration')
             # If gap > 3 units, it's the end of a character
             if duration > self.tu * 2.5:
                 result = self.decode_current()
+            self._space_emitted = False
                 
         self.is_down = is_down
         return result
@@ -144,26 +174,23 @@ class MorseDecoder:
     def decode_current(self):
         if not self.current_code:
             return None
-            
-        char = None
-        # Reverse lookup MORSE_CODE
-        for c, code in MORSE_CODE.items():
-            if code == self.current_code:
-                char = c
-                break
-        
+        char = self._REVERSE_MORSE.get(self.current_code)
         self.current_code = ""
         return char
 
     def check_timeout(self, timestamp):
-        # Call this periodically to see if a character should be finalized
-        if not self.is_down and self.current_code:
-            if timestamp - self.last_event_time > self.tu * 3:
-                return self.decode_current()
+        if self.is_down or self.last_event_time == 0:
+            return None
+        gap = timestamp - self.last_event_time
+        if self.current_code and gap > self.tu * 3:
+            return self.decode_current()
+        if not self.current_code and not self._space_emitted and gap > self.tu * 7:
+            self._space_emitted = True
+            return ' '
         return None
 
 def generate_morse_wav(text, tu, char_gap, word_gap, frequency=650.0, qrn_level=0.0):
-    SAMPLE_RATE = 44100
+    SAMPLE_RATE = 22050
     RAMP_TIME = 0.005 # 5ms
 
     def append_tone(frames, duration, frequency, volume=0.5):
@@ -298,6 +325,30 @@ def convert_wav_to_mp3(wav_filename, mp3_filename):
         return True, "Success"
     except subprocess.CalledProcessError as e:
         return False, f"Error: {e}"
+
+def generate_tone_wav(duration, frequency):
+    """Generates a pure continuous sine tone WAV of the given duration (seconds)."""
+    SAMPLE_RATE = 22050
+    RAMP_TIME = 0.005
+    num_samples = int(duration * SAMPLE_RATE)
+    ramp_samples = int(RAMP_TIME * SAMPLE_RATE)
+    frames = []
+    for i in range(num_samples):
+        vol = 0.5
+        if i < ramp_samples:
+            vol = 0.5 * (i / ramp_samples)
+        elif i > num_samples - ramp_samples:
+            vol = 0.5 * ((num_samples - i) / ramp_samples)
+        value = int(vol * 32767.0 * math.sin(2.0 * math.pi * frequency * i / SAMPLE_RATE))
+        frames.append(struct.pack('<h', value))
+    fd, path = tempfile.mkstemp(suffix=".wav", prefix="tone_")
+    with os.fdopen(fd, 'wb') as tmp:
+        with wave.open(tmp, 'wb') as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(SAMPLE_RATE)
+            wav_file.writeframes(b''.join(frames))
+    return path
 
 def play_wav(wav_filename):
     try:

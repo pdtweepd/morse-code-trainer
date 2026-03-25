@@ -7,7 +7,7 @@ import os
 import re
 import random
 
-VERSION = "1.1.0"
+VERSION = "1.2.1"
 
 def check_dependencies():
     missing = []
@@ -85,7 +85,7 @@ def generate_morse_wav(text, tu, intra_gap, char_gap, word_gap, filename="temp_m
         'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
         'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
         'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-        'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.---', '2': '..---',
+        'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
         '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
         '8': '---..', '9': '----.', ' ': '/',
         '.': '.-.-.-', ',': '--..--', '?': '..--..', "'": '.----.', '!': '-.-.--',
@@ -97,7 +97,7 @@ def generate_morse_wav(text, tu, intra_gap, char_gap, word_gap, filename="temp_m
         '<SOS>': '...---...', '<BK>': '-...-.-'
     }
 
-    SAMPLE_RATE = 44100
+    SAMPLE_RATE = 22050
     FREQUENCY = 650.0
     RAMP_TIME = 0.005 # 5ms Rise/Fall time to prevent key clicks
 

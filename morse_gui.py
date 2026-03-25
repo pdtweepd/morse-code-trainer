@@ -11,6 +11,10 @@ import os
 import time
 import subprocess
 import tempfile
+import threading
+import select
+import glob
+import struct
 import morse_logic
 
 class MorseApp:
@@ -48,67 +52,139 @@ class MorseApp:
         self.scrolling = False
         self.scroll_offset = 0
         self.pulses = []
-        
+        self._pending_temp_files = []
+        self._dongle_stop = threading.Event()
+        self._dongle_thread = None
+
         self.create_widgets()
         self.bind_keys()
+        self.vband_enabled.trace_add('write', self._on_vband_toggle)
         self.check_decoder_timeout()
 
+    # ------------------------------------------------------------------ #
+    #  Evdev constants for reading raw Linux input events                 #
+    # ------------------------------------------------------------------ #
+    _INPUT_EVENT_FMT = '@qqHHi'  # timeval(sec, usec), type, code, value
+    _INPUT_EVENT_SIZE = struct.calcsize('@qqHHi')
+    _EV_KEY = 1
+
     def bind_keys(self):
-        # VBand common keys
         for key in ['bracketleft', 'bracketright', 'period', 'comma', 'slash', 'space']:
             self.root.bind(f'<KeyPress-{key}>', self.on_key_press)
             self.root.bind(f'<KeyRelease-{key}>', self.on_key_release)
 
-    def on_key_press(self, event):
+    # ---------- dongle discovery ---------- #
+
+    def _find_dongle(self):
+        """Return the /dev/input/eventN path for the VBand HID dongle (413d:2107), or None."""
+        for vendor_path in glob.glob('/sys/class/input/event*/device/id/vendor'):
+            try:
+                vendor = open(vendor_path).read().strip()
+                product = open(vendor_path.replace('vendor', 'product')).read().strip()
+                if vendor == '413d' and product == '2107':
+                    event_name = vendor_path.split('/sys/class/input/')[1].split('/')[0]
+                    return f'/dev/input/{event_name}'
+            except Exception:
+                pass
+        return None
+
+    # ---------- dongle reader thread ---------- #
+
+    def _dongle_reader(self, device_path, stop_event):
+        try:
+            with open(device_path, 'rb') as f:
+                while not stop_event.is_set():
+                    r, _, _ = select.select([f], [], [], 0.1)
+                    if not r:
+                        continue
+                    data = f.read(self._INPUT_EVENT_SIZE)
+                    if len(data) < self._INPUT_EVENT_SIZE:
+                        break
+                    _, _, evtype, _code, value = struct.unpack(self._INPUT_EVENT_FMT, data)
+                    if evtype == self._EV_KEY:
+                        if value == 1:    # key down
+                            self.root.after(0, self._handle_key_down)
+                        elif value == 0:  # key up
+                            self.root.after(0, self._handle_key_up)
+        except PermissionError:
+            self.root.after(0, lambda: self.status.config(
+                text="Dongle error: permission denied — run: sudo usermod -aG input $USER",
+                foreground="red"))
+        except Exception:
+            pass
+
+    # ---------- shared key handlers (keyboard + dongle) ---------- #
+
+    def _handle_key_down(self):
         if not self.vband_enabled.get(): return
-        if self.decoder.is_down: return # Prevent auto-repeat
-        
+        if self.decoder.is_down: return  # Prevent auto-repeat
         now = time.time()
-        # Visual pulse
         self.user_pulses.append([True, 0, now])
-        
-        # Decoder logic
         char = self.decoder.handle_event(True, now)
         if char:
             self.decoded_text.insert(tk.END, char)
             self.decoded_text.see(tk.END)
-            
-        # Real-time Sidetone
         if not self.sidetone_proc:
-            # Generate a short tone file if it doesn't exist
-            sidetone_file = os.path.join(tempfile.gettempdir(), "sidetone.wav")
-            if not os.path.exists(sidetone_file):
-                morse_logic.generate_morse_wav("E", 1.0, 1.0, 1.0, self.freq.get()) # This creates a temp wav
-                # Actually, let's just use a simple popen call to aplay with a synthesized tone
-                # For simplicity, we'll just trigger aplay on a 1-second sine wave file
-                # But to avoid file I/O lag, we'll just use the logic from play_wav
-                pass
-            
             try:
-                # Play a continuous tone using aplay and a synthesized pipe (advanced)
-                # For now, let's just use a pre-generated 2-second tone file
-                if not hasattr(self, '_tone_path'):
-                    self._tone_path = morse_logic.generate_morse_wav("T", 2.0, 2.0, 2.0, self.freq.get())
+                freq = self.freq.get()
+                if not hasattr(self, '_tone_path') or getattr(self, '_tone_freq', None) != freq:
+                    if hasattr(self, '_tone_path') and os.path.exists(self._tone_path):
+                        os.remove(self._tone_path)
+                    self._tone_path = morse_logic.generate_tone_wav(10.0, freq)
+                    self._tone_freq = freq
                 self.sidetone_proc = subprocess.Popen(["/usr/bin/aplay", "-q", self._tone_path])
-            except:
+            except Exception:
                 pass
 
-    def on_key_release(self, event):
+    def _handle_key_up(self):
         if not self.vband_enabled.get(): return
-        
-        # Stop sidetone
         if self.sidetone_proc:
-            self.sidetone_proc.terminate()
+            try:
+                self.sidetone_proc.terminate()
+            except Exception:
+                pass
             self.sidetone_proc = None
-
         now = time.time()
         self.decoder.handle_event(False, now)
-        
-        # Finalize visual pulse
         if self.user_pulses and self.user_pulses[-1][0]:
             self.user_pulses[-1][1] = now - self.user_pulses[-1][2]
-            # Add gap
             self.user_pulses.append([False, 0, now])
+
+    def on_key_press(self, event):
+        self._handle_key_down()
+
+    def on_key_release(self, event):
+        self._handle_key_up()
+
+    # ---------- VBand toggle ---------- #
+
+    def _on_vband_toggle(self, *args):
+        vband_keys = ['bracketleft', 'bracketright', 'period', 'comma', 'slash', 'space']
+        if self.vband_enabled.get():
+            self.decoder.reset()
+            self.user_pulses = []
+            # Block VBand keys from typing into the text input
+            for key in vband_keys:
+                self.text_input.bind(f'<KeyPress-{key}>', lambda e: "break")
+                self.text_input.bind(f'<KeyRelease-{key}>', lambda e: "break")
+            # Start dongle reader thread
+            device = self._find_dongle()
+            if device:
+                self._dongle_stop.clear()
+                self._dongle_thread = threading.Thread(
+                    target=self._dongle_reader,
+                    args=(device, self._dongle_stop),
+                    daemon=True)
+                self._dongle_thread.start()
+                self.status.config(text=f"VBand active — dongle: {device}", foreground="green")
+            else:
+                self.status.config(text="VBand active — dongle not found, keyboard only", foreground="orange")
+        else:
+            self._dongle_stop.set()
+            for key in vband_keys:
+                self.text_input.unbind(f'<KeyPress-{key}>')
+                self.text_input.unbind(f'<KeyRelease-{key}>')
+            self.status.config(text="Ready", foreground="blue")
 
     def check_decoder_timeout(self):
         if self.vband_enabled.get():
@@ -245,6 +321,15 @@ class MorseApp:
                 name = self.sanitize_for_filename(text)
                 self.output_file.set(os.path.join(home_dir, f"morse_{name}.mp3"))
 
+    def _cleanup_temp_files(self):
+        for f in self._pending_temp_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception:
+                pass
+        self._pending_temp_files = []
+
     def update_visual(self, event=None):
         text = self.text_input.get(1.0, tk.END).strip()
         tu, ts, char_gap, word_gap = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
@@ -318,22 +403,28 @@ class MorseApp:
     def check_deps(self):
         lame = morse_logic.get_lame_path()
         espeak = os.path.exists("/usr/bin/espeak")
+        dongle = self._find_dongle()
         msg = f"Lame encoder: {'Found' if lame else 'NOT Found'}\n"
-        msg += f"espeak (Voice): {'Installed' if espeak else 'NOT Installed'}"
+        msg += f"espeak (Voice): {'Installed' if espeak else 'NOT Installed'}\n"
+        msg += f"VBand dongle (413d:2107): {'Found at ' + dongle if dongle else 'NOT Found'}"
         messagebox.showinfo("Dependencies", msg)
 
     def play_preview(self):
         text_raw = self.text_input.get(1.0, tk.END).strip()
         if not text_raw: return
         text, _ = morse_logic.sanitize_text(text_raw)
+        self._cleanup_temp_files()
         try:
             tu, _, char_g, word_g = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
             morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get(), self.qrn_level.get())
+            self._pending_temp_files.append(morse_wav)
             wav_to_play = morse_wav
             if self.include_voice.get():
                 voice_wav = morse_logic.generate_voice_wav(text)
                 if voice_wav:
+                    self._pending_temp_files.append(voice_wav)
                     wav_to_play = morse_logic.combine_wavs([morse_wav, voice_wav], "combined.wav")
+                    self._pending_temp_files.append(wav_to_play)
             self.start_scroll()
             morse_logic.play_wav(wav_to_play)
         except Exception as e:
@@ -344,13 +435,18 @@ class MorseApp:
         if not text_raw: return
         text, ignored = morse_logic.sanitize_text(text_raw)
         if ignored and not messagebox.askyesno("Sanitation Warning", f"Skip {len(ignored)} invalid characters?"): return
+        self._cleanup_temp_files()
         try:
             tu, _, char_g, word_g = morse_logic.calculate_timings(self.char_wpm.get(), self.eff_wpm.get())
             morse_wav = morse_logic.generate_morse_wav(text, tu, char_g, word_g, self.freq.get(), self.qrn_level.get())
+            self._pending_temp_files.append(morse_wav)
             final_wav = morse_wav
             if self.include_voice.get():
                 voice_wav = morse_logic.generate_voice_wav(text)
-                if voice_wav: final_wav = morse_logic.combine_wavs([morse_wav, voice_wav], "final.wav")
+                if voice_wav:
+                    self._pending_temp_files.append(voice_wav)
+                    final_wav = morse_logic.combine_wavs([morse_wav, voice_wav], "final.wav")
+                    self._pending_temp_files.append(final_wav)
             success, msg = morse_logic.convert_wav_to_mp3(final_wav, self.output_file.get())
             if success: messagebox.showinfo("Success", f"Saved to {self.output_file.get()}")
             else: messagebox.showerror("Error", msg)
